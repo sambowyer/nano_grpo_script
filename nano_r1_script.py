@@ -1,9 +1,13 @@
 import os
 from pathlib import Path
 
+## CHANGE THESE PATHS TO YOUR OWN
 SCRATCH = Path("/user/work/dg22309/grpo/nano_script")
-
 os.environ["HF_HOME"] = str("/user/work/dg22309/huggingface")
+
+## CHANGE THESE TO YOUR OWN WANDB ENTITY AND PROJECT
+WANDB_ENTITY = "sam-bowyer-bristol"
+WANDB_PROJECT = "nano-grpo"
 
 import argparse
 import gc
@@ -32,13 +36,24 @@ from utils import (
 )
 
 
-# Load and process dataset
 def preprocess_example(
     example: Dict[str, Any],
     tokenizer: AutoTokenizer,
     SYSTEM_MESSAGE: str,
     PROMPT_TEMPLATE: str,
-):
+) -> Dict[str, Any]:
+    """
+    Preprocess an example from the dataset to create a prompt/chat template for the model to follow.
+
+    Args:
+        example (Dict[str, Any]): An example from the dataset
+        tokenizer (AutoTokenizer): The tokenizer to use
+        SYSTEM_MESSAGE (str): The system message to use
+        PROMPT_TEMPLATE (str): The prompt template to use
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the prompt and input_ids
+    """
     numbers: List[int] = example["nums"]
     target: int = example["target"]
 
@@ -61,6 +76,11 @@ def preprocess_example(
 
 def format_reward_func(completion: str, EOS_TOKEN: str) -> float:
     """
+    This function is used to reward the model for following the format of the prompt.
+    It checks that the model has included a <think> tag and a <answer> tag.
+    It also checks that the content within <answer>...</answer> conforms to a
+    specified pattern (only digits, + - * / ( ) . and whitespace).
+
     Format: <think>...</think><answer>...</answer>
 
     Also checks that the content within <answer>...</answer> conforms to a
@@ -158,6 +178,17 @@ def equation_reward_func(completion: str, nums: List[int], target: int) -> float
 def compute_reward(
     completion: str, sample: Dict[str, Any], EOS_TOKEN: str
 ) -> Tuple[float, Dict[str, float]]:
+    """
+    Compute the reward for a given completion.
+
+    Args:
+        completion (str): The completion to evaluate
+        sample (Dict[str, Any]): The sample to evaluate
+        EOS_TOKEN (str): The end of sequence token
+
+    Returns:
+        Tuple[float, Dict[str, float]]: A tuple containing the reward (float) and metrics (dict of partial-rewards)
+    """
     nums = sample["nums"]
     target = sample["target"]
 
@@ -195,15 +226,53 @@ def create_training_episodes(
     Implements DAPO dynamic sampling by discarding groups with uniform rewards,
     but falls back to minimal noise addition when discarding would result in an empty batch.
 
+    Args:
+        samples (List[Dict[str, Any]]): List of samples (i.e. prompts/questions) from the dataset
+        all_generations (List[List[int]]): List of generations for each sample (i.e. responses)
+            - List of token IDs for each generation 
+            - (i.e. len(all_generations) == len(samples) * GENERATIONS_PER_SAMPLE)
+            - (i.e. all_generations[0] is the list of token IDs for the first sample)
+            - This list is flattened across samples, but we reform it into groups of GENERATIONS_PER_SAMPLE for each sample at the start of this function
+        all_finish_reasons (List[str]]): List of finish reasons for each generation in all_generations 
+        tokenizer (AutoTokenizer): The tokenizer to use
+        EOS_TOKEN_ID (int): The end of sequence token ID
+        EOS_TOKEN (str): The end of sequence token
+        GENERATIONS_PER_SAMPLE (int): The number of generations per sample
+        policy_model (Optional[Union[DeepSpeedEngine, PreTrainedModel]]): The policy model to use for old_logps calculation
+        temperature (float): The temperature to use for the policy model (for old_logps calculation)
+        dynamic_sampling (bool): Whether to use dynamic sampling (DAPO)
+        algo_config (Optional[Dict[str, Any]]): The algorithm configuration
+            - eps_low: Lower clipping bound (default: 0.2)
+            - eps_high: Higher clipping bound (default: eps_low or 0.28 for DAPO)
+            - norm_adv: Whether to normalize advantages by std (default: "std" for GRPO, "none" for Dr. GRPO/DAPO)
+            - length_norm: Whether to use response-level length normalization (default: True for GRPO, False for Dr. GRPO/DAPO)
+        token_budget (int): The token budget to use
+
     Returns:
-        Tuple containing:
-        1. Dictionary with processed data for training
-        2. Dictionary with generation statistics
+        Tuple[Dict[str, Any], Dict[str, Any]]:
+            - episodes (Dict[str, Any]): Dictionary with processed data for training
+                - "all_query_token_ids" (List[int]): List of token IDs for all queries
+                - "all_response_token_ids" (List[int]): List of token IDs for all responses
+                - "all_advantages" (List[List[float]]): List of advantages for all responses
+                - "adv_den" (List[int]): List of advantage denominators for all responses
+                - "all_old_logps" (List[List[float]]): List of old log probabilities for all responses
+                - "empty_batch" (bool): Whether the batch is empty
+            - stats (Dict[str, Any]): Dictionary with generation statistics
+                - "response_lengths" (List[int]): List of response lengths
+                - "rewards" (List[float]): List of rewards
+                - "non_stop_rate" (List[bool]): List of non-stop rates
+                - "uniform_groups_found" (int): Number of uniform groups found
+                - "uniform_groups_discarded" (int): Number of uniform groups discarded
+                - "noise_fallback_used" (int): Number of times noise fallback was used
+                - "empty_batch" (bool): Whether the batch is empty
     """
     assert len(all_generations) == len(all_finish_reasons)
     assert len(all_generations) == len(samples) * GENERATIONS_PER_SAMPLE
 
     # Process responses and calculate rewards
+
+
+    # Indices to reform all_generations into groups of GENERATIONS_PER_SAMPLE for each sample
     groups = [
         list(range(i, i + GENERATIONS_PER_SAMPLE))
         for i in range(0, len(all_generations), GENERATIONS_PER_SAMPLE)
@@ -231,16 +300,30 @@ def create_training_episodes(
     have_non_uniform_group = False
 
     for sample_idx, (sample, group_indices) in enumerate(zip(samples, groups)):
+        # Each iteration processes a group of GENERATIONS_PER_SAMPLE responses for a single sample
+
+        # Get the token IDs for the responses and finish reasons in this group
+        # Both of these are lists of length GENERATIONS_PER_SAMPLE
         response_token_ids = [all_generations[i] for i in group_indices]
         finish_reasons = [all_finish_reasons[i] for i in group_indices]
+
+        assert len(response_token_ids) == len(finish_reasons) == GENERATIONS_PER_SAMPLE
+
+        # Decode the responses to text
         responses = tokenizer.batch_decode(
             response_token_ids, skip_special_tokens=False
         )
+
+        # Compute the rewards and metrics for each response
         rewards_and_metrics = [
             compute_reward(resp, sample, EOS_TOKEN) for resp in responses
         ]
         rewards, reward_metrics = zip(*rewards_and_metrics)
         rewards = np.array(rewards, dtype=np.float32)
+
+        # Check that the rewards and metrics are the correct shape
+        assert rewards.shape == (GENERATIONS_PER_SAMPLE,)
+        assert len(reward_metrics) == GENERATIONS_PER_SAMPLE
 
         # Dynamic sampling with empty batch prevention
         if dynamic_sampling:
@@ -286,37 +369,59 @@ def create_training_episodes(
         advantages = advantages.tolist()
 
         # Compute old log probabilities if policy model is provided
+        # old_logps_group is a list of length GENERATIONS_PER_SAMPLE
+        # Each element is a list of per-token log probabilities for a single response in this group
         old_logps_group = []
         if policy_model is not None:
             for i, response in enumerate(response_token_ids):
+                # each iteration here is a single response 
+                # (i.e. a single generation out of GENERATIONS_PER_SAMPLE many)
+
+                # Get the query token IDs for the sample
                 query = sample["input_ids"]
+
+                # Combine the query and response token IDs
                 combined_ids = torch.tensor(
                     [query + response], device=policy_model.device
                 )
+
+                # Create an attention mask and labels tensor
                 attention_mask = torch.ones_like(combined_ids)
                 labels = torch.tensor(
                     [[-100] * len(query) + response], device=policy_model.device
                 )
 
+                # Create a model inputs dictionary
                 model_inputs = {
                     "input_ids": combined_ids,
                     "attention_mask": attention_mask,
                     "labels": labels,
                 }
 
+                # Compute the old log probabilities for the response
                 with torch.no_grad():
                     old_logp = compute_token_log_probs(
                         policy_model, model_inputs, temperature
                     )
                     response_len = len(response)
+
+                    # old_logp is a tensor of shape (1, seq_len)
+                    # We want to get the log probabilities for the response tokens
+                    # (i.e. the tokens after the query tokens)
                     old_logps_group.append(
                         old_logp[0, -response_len:].detach().cpu().tolist()
                     )
 
+        # per_token_advantages is a list of length GENERATIONS_PER_SAMPLE
+        # Each element is a list of length len(resp)
+        # Each element is the advantage for the response
+        # (i.e. the advantage is the same for each token in the response)
         per_token_advantages = [
             [adv] * len(resp) for adv, resp in zip(advantages, response_token_ids)
         ]
 
+        # Extend the lists with the new episode data
+        # (Note: this is a flattened list of all the data for all the responses over all groups, hence the .extend())
         all_query_token_ids.extend([sample["input_ids"]] * len(response_token_ids))
         all_responses_token_ids.extend(response_token_ids)
         all_advantages.extend(per_token_advantages)
@@ -734,7 +839,7 @@ def main():
     if args.algo == "optimal":
         RUN_NAME = f"{model_name_short}_optimal_g{GENERATIONS_PER_SAMPLE}_t{TEMPERATURE}_lr{LEARNING_RATE}"
 
-    EXP_DIR = SCRATCH / "deepseek_hackathon" / RUN_NAME
+    EXP_DIR = SCRATCH / "runs" / RUN_NAME
     EXP_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"Using algorithm: {algo_name} with configuration:")
@@ -834,8 +939,8 @@ def main():
 
     # Wandb for logging
     wandb.init(
-        entity="sam-bowyer-bristol",
-        project="r1-aha-moment",
+        entity=WANDB_ENTITY,
+        project=WANDB_PROJECT,
         name=RUN_NAME,
         config={
             "model_name": MODEL_NAME,
