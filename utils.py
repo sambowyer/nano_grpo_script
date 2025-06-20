@@ -11,27 +11,6 @@ from deepspeed import DeepSpeedEngine
 from transformers import AutoTokenizer, PreTrainedModel
 from vllm import LLM, SamplingParams
 
-DEFAULT_SYSTEM_MESSAGE = "You are a helpful assistant. You first think about the reasoning process in the mind and then provide the user with the answer."
-DEFAULT_PROMPT_TEMPLATE = "Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) and each number can only be used once. Show your work in <think> </think> tags. And return the final equation and answer in <answer> </answer> tags, for example <answer>(1 + 2) / (3 * 5)</answer>."
-
-
-def create_prompt(
-    numbers: List[int],
-    target: int,
-    tokenizer: AutoTokenizer,
-    system_message: str = DEFAULT_SYSTEM_MESSAGE,
-    prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
-) -> str:
-    prefix = [
-        {"role": "system", "content": system_message},
-        {
-            "role": "user",
-            "content": prompt_template.format(numbers=numbers, target=target),
-        },
-        {"role": "assistant", "content": "Let me solve this step by step.\n<think>"},
-    ]
-    return tokenizer.apply_chat_template(prefix, tokenize=False, continue_final_message=True)
-
 
 def prepare_model_inputs(
     query_token_ids: List[List[int]],
@@ -278,6 +257,21 @@ def dump_episodes(
     iteration: int,
     is_eval: bool = False,
 ) -> wandb.Table:
+    """
+    Dump episodes to a JSON file and create a wandb table.
+
+    Args:
+        episodes: Dictionary containing all query and response token IDs
+        episodes_stats: Dictionary containing rewards and response lengths
+        exp_dir: Path to the experiment directory
+        tokenizer: Tokenizer for decoding token IDs
+        iteration: Current training iteration
+        is_eval: Whether the episodes are for evaluation
+
+    Returns:
+        wandb.Table: Table containing query, response, reward, and response length
+    """
+
     query_token_ids = episodes["all_query_token_ids"]
     response_token_ids = episodes["all_response_token_ids"]
     rewards = episodes_stats["rewards"]
@@ -347,6 +341,16 @@ def dump_episodes(
 
 
 def find_last_checkpoint(exp_dir: Path) -> Tuple[Optional[Path], Optional[int]]:
+    """
+    Find the last checkpoint in the experiment directory.
+
+    Args:
+        exp_dir: Path to the experiment directory
+
+    Returns:
+        Tuple containing the path to the last checkpoint and the iteration number
+    """
+
     checkpoint_dir = exp_dir / "checkpoints"
     checkpoints = list(checkpoint_dir.glob("ckpt_*"))
     # Filter out directories that don't have a deepspeed subdirectory

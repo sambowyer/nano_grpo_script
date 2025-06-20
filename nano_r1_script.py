@@ -218,8 +218,8 @@ def create_training_episodes(
     policy_model=None,  # For old_logps calculation
     temperature=1.0,  # For old_logps calculation
     dynamic_sampling=False,  # For DAPO
-    algo_config=None,  # Added algo_config parameter
-    token_budget=1024,  # Added token budget parameter with default
+    algo_config=None,  
+    token_budget=1024, 
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Process model generations and calculate rewards for training episodes.
