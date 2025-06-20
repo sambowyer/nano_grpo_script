@@ -1,0 +1,29 @@
+name: grpo
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pytorch=2.4.0
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.4
+  - numpy
+  - tqdm
+  - nccl
+  - cudnn
+  - cudatoolkit
+  - accelerate
+  - pip
+  - pip:
+    - deepspeed
+    - transformers
+    - datasets
+    - wandb
+    - vllm==0.7.3
+    - flash-attn 
+    # - accelerate
+    - matplotlib
+    - highlight-text
