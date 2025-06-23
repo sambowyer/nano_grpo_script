@@ -55,7 +55,7 @@ def process_training_episodes(
         Tuple[Dict[str, Any], Dict[str, Any]]:
             - episodes (Dict[str, Any]): Dictionary with processed data for training
                 - "all_query_token_ids" (List[int]): List of token IDs for all queries
-                - "all_response_token_ids" (List[int]): List of token IDs for all responses
+                - "all_response_token_ids" (List[List[int]]): List of token IDs for all responses
                 - "all_advantages" (List[List[float]]): List of advantages for all responses
                 - "adv_den" (List[int]): List of advantage denominators for all responses
                 - "all_old_logps" (List[List[float]]): List of old log probabilities for all responses
