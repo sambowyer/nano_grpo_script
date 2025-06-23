@@ -25,6 +25,8 @@ after the regular env setup.
 python train.py --algo grpo
 ```
 
+Note: DAPO doesn't seem to be working at the moment with the currently chosen Qwen model.
+
 # Structure
 
 - `train.py`: Main script to train the model.
